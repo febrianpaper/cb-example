@@ -1,2 +1,4 @@
 *.exe
-vendor
+client/vendor/
+infobib-server/vendor/
+halosis-server/vendor/
