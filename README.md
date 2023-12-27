@@ -21,7 +21,7 @@ $ make run
 ```
 
 ## Run Client
-Open New terminal and type this commands:
+Before we can run client, we need to run Arango DB localy, and set the environment variable `ARANGO_USER`, `ARANGO_PASSWORD`, `ARANGO_HOST` and `ARANGO_DB_NAME` in app.env file. After that, we can type this commands:
 ```bash
 $ cd client
 $ go mod vendor
