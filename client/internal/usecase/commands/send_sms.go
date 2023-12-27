@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"errors"
-	"fbriansyah/client/internal/arangodb"
 	"fbriansyah/client/internal/domain"
 	"fbriansyah/client/internal/domain/senderlog"
 	"fbriansyah/client/internal/domain/vendor"
@@ -114,55 +113,38 @@ func NewSendSmsHandler(listVendor []string, configs ...SendSmsConfig) (*SendSmsH
 
 // SendSms sends sms to the given sender.
 func (h *SendSmsHandler) SendSms(ctx context.Context, params SendSmsParams) error {
+
+	err := h.sendSmsWithVendors(ctx, params)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (h *SendSmsHandler) sendSmsWithVendors(ctx context.Context, params SendSmsParams) error {
+
 	successSend := 0
 	vendors, err := h.vendorRepo.List(ctx, h.vendors)
 	if err != nil {
 		return err
 	}
-	// loop trouhgh vendor and send sms depending on vendor priority
+
 	for _, v := range vendors {
 		if !v.Setting.AllowSms {
 			continue
 		}
 
 		sender := h.vendorsSenderMap[v.ID]
-		if v.Setting.IsSupportTemplate && params.TemplateName != "" {
-			// sending sms with template
-			log, err := sender.SendWithTemplate(ctx, params.To, domain.TemplateConfig{
-				Name: params.TemplateName,
-				Data: params.TemplateData,
-			})
-			if err == nil {
-				errLog := h.senderLogRepo.Create(ctx, log)
-				if errLog != nil {
-					fmt.Println(errLog)
-					return arangodb.ErrCreateSenderlog
-				}
-				successSend++
-				break
-			}
-			if errors.Is(err, httpbreaker.ErrVendorNotAvailable) {
-				continue
-			}
-			// TODO: Send sender error to new relic, and send notification to slack
-			fmt.Println(err)
-		} else {
-			// sending sms without template
-			log, err := sender.Send(ctx, params.To, params.Message)
-			if err == nil {
-				errLog := h.senderLogRepo.Create(ctx, log)
-				if errLog != nil {
-					fmt.Println(errLog)
-					return arangodb.ErrCreateSenderlog
-				}
-				successSend++
-				break
-			}
-			if errors.Is(err, httpbreaker.ErrVendorNotAvailable) {
-				continue
-			}
-			// TODO: Send sender error to new relic, and send notification to slack
-			fmt.Println(err)
+
+		err = sendSms(ctx, sender, params, &successSend, h.senderLogRepo, v)
+		if err != nil {
+			handleSendError(err)
+			continue
+		}
+
+		if successSend > 0 {
+			break
 		}
 	}
 
@@ -171,4 +153,54 @@ func (h *SendSmsHandler) SendSms(ctx context.Context, params SendSmsParams) erro
 	}
 
 	return nil
+}
+
+func sendSms(ctx context.Context, sender domain.Sender, params SendSmsParams, successSend *int, senderLogRepo senderlog.Repository, v vendor.Vendor) error {
+	var log *senderlog.Senderlog
+	var err error
+
+	if v.Setting.IsSupportTemplate && params.TemplateName != "" {
+		log, err = sendSmsWithTemplate(ctx, sender, params)
+	} else {
+		log, err = sendSmsWithoutTemplate(ctx, sender, params)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	errLog := senderLogRepo.Create(ctx, log)
+	if errLog != nil {
+		return errLog
+	}
+
+	*successSend++
+
+	return nil
+}
+
+func handleSendError(err error) {
+	if errors.Is(err, httpbreaker.ErrVendorNotAvailable) {
+		// do nothing
+	} else {
+		// TODO: Send sender error to new relic, and send notification to slack
+		fmt.Println(err)
+	}
+}
+
+func sendSmsWithTemplate(ctx context.Context, sender domain.Sender, params SendSmsParams) (*senderlog.Senderlog, error) {
+	// sending sms with template
+	log, err := sender.SendWithTemplate(ctx, params.To, domain.TemplateConfig{
+		Name: params.TemplateName,
+		Data: params.TemplateData,
+	})
+
+	return log, err
+}
+
+func sendSmsWithoutTemplate(ctx context.Context, sender domain.Sender, params SendSmsParams) (*senderlog.Senderlog, error) {
+	// sending sms without template
+	log, err := sender.Send(ctx, params.To, params.Message)
+
+	return log, err
 }
